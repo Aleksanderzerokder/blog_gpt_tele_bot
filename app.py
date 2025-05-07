@@ -1,25 +1,25 @@
 import os
 import requests
 import openai
+import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-# Инициализация FastAPI-приложения
 app = FastAPI(title="Blog Post Generator", description="Генерация статей на основе свежих новостей", version="1.0")
 
-# Установка API ключей из переменных окружения
 openai.api_key = os.getenv("OPENAI_API_KEY")
 currentsapi_key = os.getenv("CURRENTS_API_KEY")
 
-# Проверка наличия ключей при старте приложения
 if not openai.api_key or not currentsapi_key:
     raise ValueError("Оба API ключа (OPENAI_API_KEY и CURRENTS_API_KEY) должны быть заданы в переменных окружения.")
 
-# Модель входных данных — тема статьи
 class Topic(BaseModel):
     topic: str
 
-# Функция получения новостей с Currents API
+def escape_markdown_v2(text: str) -> str:
+    escape_chars = r"_*[]()~`>#+-=|{}.!"
+    return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
+
 def get_recent_news(topic: str) -> str:
     url = "https://api.currentsapi.services/v1/latest-news"
     params = {
@@ -37,15 +37,12 @@ def get_recent_news(topic: str) -> str:
     if not news_data:
         return "No recent news found."
 
-    # Возвращаем первые 5 заголовков новостей
     return "\n".join([f"- {article['title']}" for article in news_data[:5]])
 
-# Основная функция генерации статьи
 def generate_content(topic: str) -> dict:
     recent_news = get_recent_news(topic)
 
     try:
-        # Генерация заголовка
         title_response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[{
@@ -57,7 +54,6 @@ def generate_content(topic: str) -> dict:
         )
         title = title_response.choices[0].message.content.strip()
 
-        # Генерация мета-описания
         meta_description_response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[{
@@ -69,7 +65,6 @@ def generate_content(topic: str) -> dict:
         )
         meta_description = meta_description_response.choices[0].message.content.strip()
 
-        # Генерация основного текста статьи
         post_content_response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=[{
@@ -81,8 +76,7 @@ def generate_content(topic: str) -> dict:
                 3. Структура с подзаголовками
                 4. Анализ текущих трендов
                 5. Примеры из новостей
-                6. Ясный и доступный стиль
-                """
+                6. Ясный и доступный стиль"""
             }],
             max_tokens=1500,
             temperature=0.5,
@@ -91,32 +85,27 @@ def generate_content(topic: str) -> dict:
         )
         post_content = post_content_response.choices[0].message.content.strip()
 
-        # Возвращаем итог
         return {
-            "title": title,
-            "meta_description": meta_description,
-            "post_content": post_content
+            "title": escape_markdown_v2(title),
+            "meta_description": escape_markdown_v2(meta_description),
+            "post_content": escape_markdown_v2(post_content)
         }
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка генерации контента: {str(e)}")
 
-# Эндпоинт генерации статьи
 @app.post("/generate-post", summary="Генерация статьи по теме")
 async def generate_post(topic: Topic):
     return generate_content(topic.topic)
 
-# Эндпоинт проверки работоспособности
 @app.get("/", summary="Корневой эндпоинт")
 async def root():
     return {"message": "Сервис генерации работает."}
 
-# Эндпоинт heartbeat для мониторинга
 @app.get("/heartbeat", summary="Проверка состояния сервиса")
 async def heartbeat():
     return {"status": "OK"}
 
-# Точка входа при запуске через `python app.py`
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
