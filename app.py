@@ -5,8 +5,10 @@ import re
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+# Инициализация FastAPI-приложения
 app = FastAPI(title="Blog Post Generator", description="Генерация статей на основе свежих новостей", version="1.0")
 
+# Установка API ключей из переменных окружения
 openai.api_key = os.getenv("OPENAI_API_KEY")
 currentsapi_key = os.getenv("CURRENTS_API_KEY")
 
@@ -17,6 +19,9 @@ class Topic(BaseModel):
     topic: str
 
 def escape_markdown_v2(text: str) -> str:
+    """
+    Экранирует специальные символы MarkdownV2 для Telegram.
+    """
     escape_chars = r"_*[]()~`>#+-=|{}.!"
     return re.sub(f"([{re.escape(escape_chars)}])", r"\\\1", text)
 
@@ -38,6 +43,15 @@ def get_recent_news(topic: str) -> str:
         return "No recent news found."
 
     return "\n".join([f"- {article['title']}" for article in news_data[:5]])
+
+def trim_to_telegram_limit(text: str, max_chars: int = 4096) -> str:
+    if len(text) <= max_chars:
+        return text
+    trimmed = text[:max_chars - 6]  # запас под « ...»
+    last_dot = trimmed.rfind('.')
+    if last_dot != -1:
+        return trimmed[:last_dot + 1] + " ..."
+    return trimmed.rstrip() + " ..."
 
 def generate_content(topic: str) -> dict:
     recent_news = get_recent_news(topic)
@@ -71,19 +85,21 @@ def generate_content(topic: str) -> dict:
                 "role": "user",
                 "content": f"""Напиши статью по теме '{topic}', опираясь на последние новости:\n{recent_news}.
                 Требования:
-                1. Не менее 1500 символов
+                1. Не более 4000 символов
                 2. Вступление, основная часть, заключение
                 3. Структура с подзаголовками
                 4. Анализ текущих трендов
                 5. Примеры из новостей
-                6. Ясный и доступный стиль"""
+                6. Ясный и доступный стиль
+                """
             }],
-            max_tokens=1500,
+            max_tokens=1000,
             temperature=0.5,
             presence_penalty=0.6,
             frequency_penalty=0.6
         )
         post_content = post_content_response.choices[0].message.content.strip()
+        post_content = trim_to_telegram_limit(post_content)
 
         return {
             "title": escape_markdown_v2(title),
